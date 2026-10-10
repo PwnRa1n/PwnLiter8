@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo.svg" width="180" height="180" alt="PwnLiter8 Logo"/>
+
 # Pwnliter8
 
 **A tethered bootrom exploit for Apple A12, S4/S5 & A13**
