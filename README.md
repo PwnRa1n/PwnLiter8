@@ -61,7 +61,7 @@ to the corresponding pins.
 > - Keep the Lightning end of the cable **relatively short**.
 > - Signal pins are **GPIO12 (D+)** and **GPIO13 (D−)** by default, but that's configurable.
 
-**Tested on:** Waveshare RP2350 USB-A · Waveshare RP2350 Zero · Pimoroni TINY2350 · Raspberry Pi Pico 2
+**Tested on:** Waveshare RP2350 USB-A
 
 RP2040 can theoretically be used too, but it is currently **not** very stable
 and the Apple A13 SoC does **not** work on it at all.
@@ -192,6 +192,19 @@ The Pico 2 has no RGB LED, so states are encoded as blink patterns instead:
 
 ## Building
 
+### Pre-built firmware
+
+Pre-built **UF2** images are available in the [`artifacts/`](artifacts/) directory:
+
+| File | Board |
+|---|---|
+| `Pwnliter8.waveshare_rp2350_usb_a.uf2` | Waveshare RP2350 USB-A |
+| `Pwnliter8.waveshare_rp2350_zero.uf2` | Waveshare RP2350 Zero |
+| `Pwnliter8.pimoroni_tiny2350.uf2` | Pimoroni TINY2350 |
+| `Pwnliter8.pico2.uf2` | Raspberry Pi Pico 2 |
+
+Flash via RP2350 bootrom mass-storage mode or with [picotool](https://github.com/raspberrypi/picotool).
+
 ### Requirements
 
 | Tool | Version |
@@ -201,26 +214,7 @@ The Pico 2 has no RGB LED, so states are encoded as blink patterns instead:
 | [picotool](https://github.com/raspberrypi/picotool) | any recent (depends on `libusb`) |
 | CMake | ≥ 3.13 |
 
-### Quick build (copy-paste)
-
-```sh
-# 1. Clone and enter
-git clone https://github.com/20obb/Pwnliter8.git
-cd Pwnliter8
-
-# 2. Set up SDK (one-time)
-git clone --depth 1 --branch 2.2.0 https://github.com/raspberrypi/pico-sdk.git /path/to/pico-sdk
-export PICO_SDK_PATH=/path/to/pico-sdk
-
-# 3. Build all release boards
-./build_release.sh
-# → artifacts/Pwnliter8.waveshare_rp2350_usb_a.uf2
-# → artifacts/Pwnliter8.waveshare_rp2350_zero.uf2
-# → artifacts/Pwnliter8.pimoroni_tiny2350.uf2
-# → artifacts/Pwnliter8.pico2.uf2
-```
-
-### One board
+### Build one board (recommended)
 
 ```sh
 cd Pwnliter8
@@ -238,7 +232,7 @@ cmake --build build
 | `pimoroni_tiny2350` | Pimoroni TINY2350 |
 | `pico2` | Raspberry Pi Pico 2 |
 
-### All release boards at once
+### Build all release boards at once
 
 ```sh
 export PICO_SDK_PATH=/path/to/pico-sdk   # must be 2.2.0
@@ -347,8 +341,8 @@ Love is Control
 | `boards/` | Per-board pin & LED configuration |
 | `tools/Pwnliter8ctl` | Host-side Python control tool (`pyusb`) |
 | `tests/` | Host-side unit tests |
-| [`MAINTENANCE.md`](MAINTENANCE.md) | **Read before changing anything** |
-| [`VENDORED.md`](VENDORED.md) | Vendored USB library — fork point and known divergence |
+| [`Docs/MAINTENANCE.md`](Docs/MAINTENANCE.md) | **Read before changing anything** |
+| [`Docs/VENDORED.md`](Docs/VENDORED.md) | Vendored USB library — fork point and known divergence |
 | [`CHANGES.md`](CHANGES.md) | Detailed changelog of all improvements |
 
 ---
@@ -421,7 +415,7 @@ tools/        — Host-side Python tool
 > RP2350 executes this firmware from external QSPI flash through a small
 > instruction cache, and cache evictions shift instruction timing. **Seemingly
 > unrelated code changes can reduce exploit reliability.** Read
-> [`MAINTENANCE.md`](MAINTENANCE.md) before touching a single line — it lists the
+> [`Docs/MAINTENANCE.md`](Docs/MAINTENANCE.md) before touching a single line — it lists the
 > strictly protected files, the load-bearing oddities that look like bugs but
 > aren't, and the pre/post-change checklists.
 
@@ -431,7 +425,7 @@ The short version:
   **load-bearing**. Do not remove them as dead delays.
 - 💡 **Blinking the LED during the exploit breaks reliability** — which is why
   LED activity in timing-sensitive paths is deliberately minimal.
-- 📦 `pio_usb/` is vendored and frozen. See [`VENDORED.md`](VENDORED.md).
+- 📦 `pio_usb/` is vendored and frozen. See [`Docs/VENDORED.md`](Docs/VENDORED.md).
 - ⚙️ RP2040 builds are inherently less reliable than RP2350. That's a property
   of the hardware timing, not a code defect to patch.
 
