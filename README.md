@@ -25,27 +25,281 @@ This is a fork of [`usbliter8`](https://github.com/20obb/usbliter8), renamed
 
 ---
 
-## What's new in this fork
+## Contents
 
-| Change | Details |
+| | Section |
 |---|---|
-| **LED status palette** | Five named colours replace the old orange/blue/green/red set, with defined meaning per state |
-| **Power-on sweep** | One-shot colour animation at boot, then a steady idle colour |
-| **50 % brightness** | Every RGB channel scaled by the same factor — full hue accuracy at half power |
-| **`Pwnliter8ctl`** | Control tool renamed; same `boot` / `demote` commands |
-| **Host-side tests** | New `tests/` — 9 unit tests that run without hardware or `pyusb` |
-| **Docs** | New `README.md`, `MAINTENANCE.md`, `VENDORED.md` and `.clang-tidy` |
+| 🔧 | [**Technical changes**](#technical-changes) — what changed and how, at the code level |
+| 💡 | [**The LED status light**](#the-led-status-light) — what every colour means |
+| 🚀 | [**Quick start**](#quick-start) — hardware, flashing, exploiting |
+| 🛠 | [**Building**](#building) — from source |
+| 🎛 | [**Pwnliter8ctl**](#pwnliter8ctl) — demote / boot raw iBoot |
+| 📁 | [**Repository layout**](#repository-layout) |
+| ⚠️ | [**Maintenance**](#maintenance) — read before changing anything |
 
 ---
 
-## Contents
+## Technical changes
 
-- [**The LED status light**](#the-led-status-light) — what every colour means
-- [**Quick start**](#quick-start) — hardware, flashing, exploiting
-- [**Building**](#building) — from source
-- [**Pwnliter8ctl**](#pwnliter8ctl) — demote / boot raw iBoot
-- [**Repository layout**](#repository-layout)
-- [**Maintenance**](#maintenance) — read before changing anything
+Five areas changed. **Firmware logic changed in exactly one file — `led.c`
+(+107 / −13)** — everything else is build tooling, tests, or documentation.
+
+| Area | File(s) | Nature of the change |
+|---|---|---|
+| **LED subsystem** | `led.c` | Animation engine, cross-backend palette, brightness scaling, state semantics |
+| **Build & payload toolchain** | `CMakeLists.txt`, `build_release.sh`, `*/make.sh`, `start.S` ×2, `resources/*.h` | Target rename, reproducible cross-assembly, payload regeneration |
+| **Host-side test suite** | `tests/test_pwnliter8ctl.py` *(new)* | Protocol regression tests, hardware-free |
+| **Static analysis** | `.clang-tidy` *(new)* | Read-only lint config, deliberately not wired into the build |
+| **Engineering docs** | `MAINTENANCE.md`, `VENDORED.md` *(new)* | Protected-area and vendored-fork-point documentation |
+
+---
+
+### 1 · LED subsystem
+
+#### a) One-shot startup animation
+
+A new timer-driven engine in `led.c`, self-contained and independent of the
+existing blink/breathe timers:
+
+```c
+static const uint32_t startup_colors[] = { AMBER, CYAN, LIME, PURPLE, RED };
+
+#define STARTUP_STEPS   (sizeof(startup_colors) / sizeof(startup_colors[0]))
+#define STARTUP_STEP_MS (150)
+
+static bool _led_startup_cb(__unused repeating_timer_t *rt) {
+    led_ctx.startup_idx++;
+
+    if (led_ctx.startup_idx >= STARTUP_STEPS) {
+        /* every colour shown: settle on steady idle cyan and stop repeating */
+        led_ctx.startup_active = false;
+        led_set_color(CYAN);
+        return false;
+    }
+
+    led_switch_color(startup_colors[led_ctx.startup_idx]);
+    return true;
+}
+```
+
+Engineering properties, each of which is a deliberate design choice:
+
+| Property | How it is achieved |
+|---|---|
+| **Non-blocking** | Driven by an SDK `repeating_timer_t` firing from the alarm IRQ. No `sleep_ms()`, no busy-wait, no polling loop — the main thread is never held. |
+| **Runs exactly once** | The callback returns `false` on the final step, which is how the SDK cancels a repeating timer. Normal completion needs no cleanup call. |
+| **Own timer slot** | Uses a dedicated `led_ctx.startup_timer`, separate from the pre-existing blink and breathe timers — no timer aliasing between boot animation and status blinking. |
+| **Cannot leak past boot** | `led_stop_startup()` runs unconditionally at the top of `led_set_state()`, so no animation timer can survive a transition into `RUNNING` / `SUCCESS` / `ERROR`. |
+| **Fails open** | `add_repeating_timer_ms()`'s return value is checked; if no timer slot is available the LED jumps straight to cyan instead of stalling on amber forever. |
+| **Never runs during the exploit** | It is driven from `LED_STATE_BOOTING`, which executes strictly inside `main()`'s load-bearing `sleep_ms(2000)` window — before `usb_start()` / `exploit_run()`. The sweep is therefore always finished and cancelled before USB, PIO and the exploit start. |
+| **No added per-tick cost** | Each step performs exactly one colour write — the same cost as the 200 ms boot blink it replaced — and nothing at all while the exploit runs. |
+
+#### b) Palette unified across both RGB backends
+
+Previously each backend carried its own independently hand-tuned table, so the
+same status looked different on a Waveshare than on a Pimoroni — and there were
+only four colours for five states:
+
+```c
+/* NeoPixel backend */                 /* PWM backend */
+#define GREEN  NEOPIXEL_RGB(1, 18, 2)  #define GREEN  PWM_RGB(10, 150, 50)
+#define BLUE   NEOPIXEL_RGB(0, 10, 18) #define BLUE   PWM_RGB(0, 30, 120)
+#define AMBER  NEOPIXEL_RGB(18, 2, 0)  #define AMBER  PWM_RGB(170, 24, 0)
+#define RED    NEOPIXEL_RGB(24, 0, 0)  #define RED    PWM_RGB(120, 0, 0)
+```
+
+Both backends now carry **the same five hex literals**, each expressed as a
+single scale macro applied to all three channels:
+
+```c
+#define NEO_SCALE(v)    (((v) * 128) / 255)
+
+#define AMBER       NEOPIXEL_RGB(NEO_SCALE(0xff), NEO_SCALE(0xb0), NEO_SCALE(0x20))  /* #FFB020 */
+#define CYAN        NEOPIXEL_RGB(NEO_SCALE(0x00), NEO_SCALE(0xd5), NEO_SCALE(0xff))  /* #00D5FF */
+#define LIME        NEOPIXEL_RGB(NEO_SCALE(0xa3), NEO_SCALE(0xe6), NEO_SCALE(0x35))  /* #A3E635 */
+#define PURPLE      NEOPIXEL_RGB(NEO_SCALE(0xa8), NEO_SCALE(0x55), NEO_SCALE(0xf7))  /* #A855F7 */
+#define RED         NEOPIXEL_RGB(NEO_SCALE(0xff), NEO_SCALE(0x3b), NEO_SCALE(0x4f))  /* #FF3B4F */
+
+#define SUCCESS_COLOR   PURPLE
+```
+
+- The PWM backend's `PWM_SCALE` expands to the **identical expression** as
+  `NEO_SCALE` above, and substitutes `PWM_RGB(...)` for `NEOPIXEL_RGB(...)` —
+  same names, same order, same hex, same arguments on both backends.
+- One factor applied to all three channels means **hue ratios are preserved by
+  construction**, not by hand-tuning per board.
+- All values are integer macro constants → the entire palette folds to
+  immediates at compile time. Zero runtime cost and no floating point
+  (`PICO_PRINTF_SUPPORT_FLOAT=0` is already set in `CMakeLists.txt`).
+- `SUCCESS_COLOR` is an indirection, so success resolves to purple on both
+  backends without duplicating the switch case.
+
+#### c) Brightness scaling — 50 %
+
+```c
+#define NEO_SCALE(v)    (((v) * 128) / 255)
+#define PWM_SCALE(v)    (((v) * 128) / 255)
+```
+
+- **Why 128 and not 127:** `led_init()` configures `PWM_WRAP = 256`, so a
+  channel landing on level 128 gives `128 / 256` = **exactly 50.0 % duty**. The
+  NeoPixel path lands at `128 / 255` = 50.2 % of the 8-bit scale. Using 127
+  would have given 49.4 % on both.
+- **NeoPixel limits:** the SDK driver passes values through unchanged and
+  addresses a **single** pixel —
+  `pio_claim_free_sm_and_add_program_for_gpio_range(..., PICO_DEFAULT_WS2812_PIN, 1, true)`
+  — on a hard-wired rail (there is no `PICO_DEFAULT_WS2812_POWER_PIN`). The
+  worst colour draws ≈ 16 mA against a ~50 mA white ceiling. A WS2812 frame is a
+  fixed 24-bit / ~30 µs transfer regardless of value, so brightness changes the
+  **duty ratio only — never the write timing**, which matters on a
+  timing-sensitive firmware.
+- **PWM limits:** `led_init()` already requests level `PWM_WRAP` (100 %) on all
+  three channels before the first colour is ever written — that is pre-existing
+  shipped behaviour — so 50 % is comfortably inside the board's design.
+  `led_switch_color()` still masks `& 0xFF`, capping the level at 255.
+
+#### d) State semantics — five states, five distinguishable outcomes
+
+| State | Before | After |
+|---|---|---|
+| `LED_STATE_BOOTING` | amber + 200 ms blink | one-shot 5-colour sweep |
+| `LED_STATE_IDLE` | **amber — identical to booting** | steady cyan |
+| `LED_STATE_RUNNING` | blue | lime |
+| `LED_STATE_SUCCESS` | green | purple |
+| `LED_STATE_ERROR` | red | red |
+
+The old mapping made *idle* and *booting* indistinguishable, so you could not
+tell "waiting for a target" from "still starting up". All five states are now
+visually distinct.
+
+- `led_set_state()` is the **only** place a colour is chosen, and it is called
+  exclusively from the pre-existing confirmed-state sites (`main.c` for
+  `BOOTING`/`IDLE`, `exploit.c` for `RUNNING`/`SUCCESS`/`ERROR`).
+- Consequently **no edit to `main.c`, `exploit.c` or `led.h` was required** — the
+  whole feature is a `led.c`-local change.
+- The `LED_SINGLE_COLOR` (Pico 2) path and the no-LED stub were left untouched.
+
+---
+
+### 2 · Scope: what was deliberately *not* changed
+
+| Untouched | Detail |
+|---|---|
+| `exploit.c`, `usb.c`, `bus.c`, `main.c`, `led.h` | Zero diff |
+| `pio_usb/` | Vendored and frozen — see [`VENDORED.md`](VENDORED.md) |
+| `boards/` | No pin, LED-selection or build-type changes |
+| `PWM_WRAP`, `led_init()`, `led_switch_color()` bodies | Unchanged — only the palette constants they feed |
+| `DISABLED = (0, 0, 0)` | Unchanged, so "off" is still genuinely off |
+| `sleep_ms(2000)` (`main.c`), `sleep_ms(60)` (`exploit.c`) | Load-bearing, not touched |
+| `// blinking here breaks reliability, IDK` | Preserved; every steady state still calls `led_set_blinking(0)` |
+
+---
+
+### 3 · Build & payload toolchain
+
+- **CMake rename** — project, executable, program name and the shell-enable
+  guard: `usbliter8` → `Pwnliter8`, `USBLITER8_ENABLE_SHELL` →
+  `PWNLITER8_ENABLE_SHELL`. `build_release.sh` now copies `Pwnliter8.uf2`.
+- **Reproducible payload cross-assembly** — both `make.sh` scripts pin the
+  target triple and linker explicitly instead of relying on the host driver
+  defaults:
+
+  ```diff
+  -clang -arch arm64 start.S ...
+  +clang -target arm64-apple-macos11 \
+  +       -fuse-ld=$HOME/cctools/bin/arm64-apple-darwin11-ld start.S ...
+  ```
+
+- **Toolchain flags preserved** — `t8030` keeps `-Os` and
+  `-Wl,-order_file,symorder.txt`, both load-bearing for payload size and symbol
+  layout; neither was added to `t8020_t8006`, which has no order file.
+- **Target-side banner** — `start.S` ×2 now emit `.asciz " PWND:[Pwnliter8]"`,
+  and `resources/shellcode_{t8030,t8020,t8006}.h` were regenerated by `make.sh`.
+  Headers are build artifacts and are only ever produced by the script — never
+  hand-edited.
+- **No size regression:**
+
+  | Payload | Size | `PWND:` offset |
+  |---|---|---|
+  | `t8030` | 1136 B | 704 |
+  | `t8020` | 816 B | 488 |
+  | `t8006` | 816 B | 488 |
+
+---
+
+### 4 · Host-side test suite *(new)*
+
+`tests/test_pwnliter8ctl.py` — **9 tests** that lock down the externally
+observable USB protocol of `Pwnliter8ctl`:
+
+- device discovery by DFU product ID, plus the "no device" and "not pwned"
+  failure paths
+- DFU download chunking at **0x800** and the exact final-chunk remainder
+- every chunk uses `wValue=0`, `wIndex=0` and the DFU class request (`0x21`)
+- `boot` sequence ordering; `demote` sends a single custom request
+- transfer timeouts
+
+A recording `usb` stub is injected into `sys.modules` **before** the tool is
+loaded, so the suite runs on a bare Python 3 installation with no `pyusb`, no
+board and no device:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+Nothing in `tests/` is part of the firmware build — it cannot affect firmware
+output, timing or exploit behaviour.
+
+---
+
+### 5 · Static analysis *(new, deliberately inert)*
+
+`.clang-tidy` selects a `bugprone-*` + `clang-analyzer-*` check set configured
+for **analysis only**:
+
+- `WarningsAsErrors: ''`, `HeaderFilterRegex: '^$'`, `FormatStyle: none` →
+  no warnings promoted to errors, no header noise, no formatting suggestions
+- **not referenced by CMake**, so it cannot affect compilation, linking, timing
+  or UF2 output
+- the file itself documents that `clang-tidy --fix` must never be run over this
+  repository
+
+```sh
+# manual, targeted, read-only
+clang-tidy --config-file=.clang-tidy <file-you-are-reviewing>
+```
+
+---
+
+### 6 · Engineering documentation *(new)*
+
+- **`MAINTENANCE.md`** — why RP2350 QSPI-cache timing makes unrelated edits
+  risky; a table of strictly protected files; the load-bearing-oddity list
+  (`sleep_ms(2000)`, `sleep_ms(60)`, the blink-during-exploit hazard, the
+  overloaded `exploit_run() == -2` return, and the forced `Release` build type
+  on RP2040); and pre/post-change checklists, including how to syntax-check all
+  five LED code paths in isolation.
+- **`VENDORED.md`** — records the exact upstream fork point of `pio_usb/`
+  (`a5a2f5a`) and the single known line of divergence, so that divergence is
+  preserved *deliberately* instead of being "fixed" by accident.
+
+---
+
+### Verification status
+
+| Check | Result |
+|---|---|
+| `./build_release.sh` — all 4 release boards | **4/4 pass**, zero compiler warnings |
+| All 5 LED code paths compiled in isolation | 0 warnings each |
+| `python3 -m unittest discover -s tests` | **9/9 pass** |
+| Payload sizes / `PWND:` offsets | unchanged (1136/816/816 @ 704/488/488) |
+| Protected files (`exploit.c`, `usb.c`, `bus.c`, `main.c`, `pio_usb/`) | zero diff |
+| **On-hardware validation** | **NOT PERFORMED** |
+
+> [!WARNING]
+> No board has been flashed with these changes. The firmware bytes changed, and
+> this exploit is sensitive to QSPI-cache timing — treat exploit reliability as
+> **unverified** until you have reproduced it on real hardware.
 
 ---
 
