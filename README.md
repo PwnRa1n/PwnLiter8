@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" width="180" height="180" alt="PwnLiter8 Logo"/>
+<img src="assets/logo.png" width="180" height="180" alt="PwnLiter8 Logo"/>
 
 # Pwnliter8
 
