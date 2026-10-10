@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1086 1448" width="543" height="724" role="img" aria-label="PwnLiter8 logo">
+  <title>PwnLiter8</title>
+
+  <defs>
+    <!-- Silver-blue gradient used by the wordmark -->
+    <linearGradient id="wordmark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#f2f6fa"/>
+      <stop offset="45%"  stop-color="#d4dde6"/>
+      <stop offset="100%" stop-color="#93a9bd"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background (keeps the logo readable on GitHub's light theme) -->
+  <rect width="1086" height="1448" fill="#000000"/>
+
+  <!-- ================= Padlock shackle (unlocked) ================= -->
+  <path d="M 413 566
+           L 413 386
+           A 131 131 0 0 1 675 386
+           L 675 441"
+        fill="none"
+        stroke="#ffffff"
+        stroke-width="62"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- ========================= Apple body ========================= -->
+  <path fill="#ffffff" d="
+      M 543 486
+      C 512 462 470 452 438 460
+      C 386 472 342 512 322 570
+      C 296 644 310 742 350 826
+      C 374 878 404 924 442 930
+      C 476 936 500 916 543 916
+      C 586 916 610 936 644 930
+      C 682 924 712 878 736 826
+      C 776 742 790 644 764 570
+      C 744 512 700 472 648 460
+      C 616 452 574 462 543 486
+      Z"/>
+
+  <!-- ========================= Apple bite ========================= -->
+  <circle cx="712" cy="638" r="120" fill="#000000"/>
+
+  <!-- ===================== Terminal prompt ">_" ==================== -->
+  <g stroke="#000000" stroke-width="42" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 410 648 L 530 722 L 410 796"/>
+    <path d="M 552 774 L 668 774"/>
+  </g>
+
+  <!-- ========================== Wordmark ========================== -->
+  <text x="543"
+        y="1090"
+        fill="url(#wordmark)"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="150"
+        font-weight="bold"
+        letter-spacing="-3"
+        text-anchor="middle">PwnLiter8</text>
+</svg>
